@@ -1,217 +1,421 @@
 import { populateBoardPicker, renderCatalog, openThread } from "./fourchan-view.js";
 import { rssAdapter } from "./rss-adapter.js";
 
-const $ = (s, r = document) => r.querySelector(s);
-const $$ = (s, r = document) => [...r.querySelectorAll(s)];
-
+const $ = (selector, root = document) => root.querySelector(selector);
+const $$ = (selector, root = document) => [...root.querySelectorAll(selector)];
 const state = { columns: [], accounts: [] };
+const renderSequence = new WeakMap();
+let refreshing = false;
+let loadingBoards = false;
 
 async function loadState() {
-  const s = await browser.storage.local.get(["columns", "accounts", "schemaVersion"]);
-  state.columns = s.columns || [];
-  state.accounts = s.accounts || [];
-  if (!s.schemaVersion || s.schemaVersion < 1) await browser.storage.local.set({ schemaVersion: 1 });
+  const stored = await browser.storage.local.get(["columns", "accounts", "schemaVersion"]);
+  state.columns = Array.isArray(stored.columns) ? stored.columns : [];
+  state.accounts = Array.isArray(stored.accounts) ? stored.accounts : [];
+  if (!Number.isInteger(stored.schemaVersion) || stored.schemaVersion < 1) {
+    await browser.storage.local.set({ schemaVersion: 1 });
+  }
 }
+
 async function saveState() {
-  await browser.storage.local.set({
-    columns: state.columns, accounts: state.accounts
-  });
+  await browser.storage.local.set({ columns: state.columns, accounts: state.accounts });
+}
+
+function setStatus(message, isError = false) {
+  const status = $("#status");
+  status.textContent = message;
+  status.classList.toggle("status-error", isError);
 }
 
 function renderSidebar() {
-  const ul = $("#column-list");
-  ul.replaceChildren(...state.columns.map(c => {
-    const li = document.createElement("li");
-    li.textContent = c.title;
-    li.addEventListener("click", () => scrollTo(c.id));
-    return li;
+  const list = $("#column-list");
+  if (!state.columns.length) {
+    const empty = document.createElement("li");
+    empty.className = "muted";
+    empty.textContent = "No columns yet";
+    list.replaceChildren(empty);
+    return;
+  }
+  list.replaceChildren(...state.columns.map(column => {
+    const item = document.createElement("li");
+    item.textContent = column.title;
+    item.tabIndex = 0;
+    item.addEventListener("click", () => scrollTo(column.id));
+    item.addEventListener("keydown", event => {
+      if (event.key === "Enter" || event.key === " ") { event.preventDefault(); scrollTo(column.id); }
+    });
+    return item;
   }));
 }
 
 function renderColumns() {
-  $("#columns").replaceChildren(...state.columns.map(makeColumn));
-  for (const c of state.columns) {
-    const body = $(`.column[data-id="${c.id}"] .column-body`);
-    if (body) renderColumnBody(c, body);
+  const root = $("#columns");
+  if (!state.columns.length) {
+    const empty = document.createElement("section");
+    empty.className = "empty-dashboard";
+    const heading = document.createElement("h1");
+    heading.textContent = "Your watch starts here";
+    const detail = document.createElement("p");
+    detail.textContent = "Add a feed, a Bluesky timeline, or a board to create your first column.";
+    const button = document.createElement("button");
+    button.type = "button";
+    button.textContent = "+ Add your first column";
+    button.addEventListener("click", openColumnDialog);
+    empty.append(heading, detail, button);
+    root.replaceChildren(empty);
+    return;
+  }
+  root.replaceChildren(...state.columns.map(makeColumn));
+  for (const column of state.columns) {
+    const columnElement = [...root.querySelectorAll(".column")].find(element => element.dataset.id === column.id);
+    const body = columnElement?.querySelector(".column-body");
+    if (body) void renderColumnBody(column, body);
   }
 }
 
-function makeColumn(col) {
-  const el = document.createElement("div");
-  el.className = "column";
-  el.dataset.id = col.id;
-  el.innerHTML = `<div class="column-header"><span class="title"></span><button class="refresh" title="Refresh" aria-label="Refresh column">⟳</button><button class="remove" title="Remove column" aria-label="Remove column">×</button></div><div class="column-body"><p class="muted">Loading…</p></div>`;
-  $(".title", el).textContent = col.title;
-  $(".remove", el).addEventListener("click", async () => {
-    state.columns = state.columns.filter(c => c.id !== col.id);
-    await saveState(); renderSidebar(); renderColumns();
-  });
-  $(".refresh", el).addEventListener("click", () => {
-    const body = $(".column-body", el);
-    renderColumnBody(col, body);
-  });
-  return el;
+function makeColumn(column) {
+  const element = document.createElement("section");
+  element.className = "column";
+  element.dataset.id = column.id;
+  element.innerHTML = `<header class="column-header"><span class="title"></span><button class="refresh" type="button" title="Refresh" aria-label="Refresh column">⟳</button><button class="remove" type="button" title="Remove column" aria-label="Remove column">×</button></header><div class="column-body"></div>`;
+  $(".title", element).textContent = column.title;
+  $(".refresh", element).addEventListener("click", () => void renderColumnBody(column, $(".column-body", element)));
+  $(".remove", element).addEventListener("click", () => void removeColumn(column.id));
+  return element;
 }
 
-async function renderColumnBody(column, bodyEl) {
-  bodyEl.innerHTML = `<p class="muted">Loading…</p>`;
+async function removeColumn(id) {
+  const previous = state.columns;
+  state.columns = previous.filter(column => column.id !== id);
+  try {
+    await saveState();
+    renderSidebar(); renderColumns();
+    setStatus("Column removed.");
+  } catch (error) {
+    state.columns = previous;
+    setStatus(`Could not save changes: ${error.message}`, true);
+  }
+}
+
+async function renderColumnBody(column, body) {
+  const requestId = (renderSequence.get(body) || 0) + 1;
+  renderSequence.set(body, requestId);
+  body.replaceChildren(messageNode("Loading…"));
 
   if (column.type === "board") {
-    await renderCatalog(bodyEl, column.board, t => openThread(column.board, t.no));
+    await renderCatalog(body, column.board, thread => void openThread(column.board, thread.no));
     return;
   }
-  if (column.type === "rss") {
-    try {
-      const items = await rssAdapter.fetch(column);
-      if (!items.length) { bodyEl.replaceChildren(messageNode("No items.")); return; }
-      bodyEl.replaceChildren(...items.map(makeItem));
-    } catch (e) {
-      bodyEl.replaceChildren(errorNode(e.message));
-    }
-    return;
-  }
-  // social: route through background
   try {
-  const resp = await browser.runtime.sendMessage({ type: "fetchColumn", columnId: column.id });
-  if (!resp.ok) { bodyEl.replaceChildren(errorNode(resp.error)); return; }
-  if (!resp.items.length) { bodyEl.innerHTML = `<p class="muted">No items.</p>`; return; }
-  bodyEl.replaceChildren(...resp.items.map(makeItem));
-  } catch (e) { bodyEl.replaceChildren(errorNode(e.message)); }
+    let items;
+    if (column.type === "rss") {
+      items = await rssAdapter.fetch(column);
+    } else if (column.type === "home" || column.type === "hashtag") {
+      const response = await browser.runtime.sendMessage({ type: "fetchColumn", columnId: column.id });
+      if (!response?.ok) throw new Error(response?.error || "The background script returned no response.");
+      items = response.items;
+    } else {
+      throw new Error(`Unsupported column type: ${column.type}`);
+    }
+    if (renderSequence.get(body) !== requestId) return;
+    if (!Array.isArray(items) || items.length === 0) {
+      body.replaceChildren(messageNode("No items."));
+      return;
+    }
+    body.replaceChildren(...items.map(makeItem));
+  } catch (error) {
+    if (renderSequence.get(body) === requestId) body.replaceChildren(errorNode(error.message, () => renderColumnBody(column, body)));
+  }
 }
 
 function makeItem(item) {
-  const div = document.createElement("div");
-  div.className = "item";
+  const wrapper = document.createElement("article");
+  wrapper.className = "item";
   const author = document.createElement("div");
   author.className = "author";
-  author.textContent = item.handle ? `@${item.handle}` : item.author;
-  const time = document.createElement("div");
+  author.textContent = item.handle ? `@${item.handle}` : (item.author || "Unknown author");
+  const time = document.createElement("time");
   time.className = "time";
-  time.textContent = item.createdAt ? new Date(item.createdAt).toLocaleString() : "";
-  const text = document.createElement("div");
-  text.textContent = item.text;
-  if (item.url) {
-    let target;
-    try { target = new URL(item.url); } catch { target = null; }
-    if (target && ["http:", "https:"].includes(target.protocol)) {
-      text.style.cursor = "pointer";
-      text.addEventListener("click", () => browser.tabs.create({ url: target.href }));
-    }
+  if (item.createdAt && Number.isFinite(Date.parse(item.createdAt))) {
+    time.dateTime = new Date(item.createdAt).toISOString();
+    time.textContent = new Date(item.createdAt).toLocaleString();
   }
-  div.append(author, time, text);
-  return div;
+  const text = document.createElement("div");
+  text.className = "item-text";
+  text.textContent = item.text || "";
+  if (item.url) {
+    try {
+      const url = new URL(item.url);
+      if (url.protocol === "https:" || url.protocol === "http:") {
+        const link = document.createElement("a");
+        link.href = url.href;
+        link.target = "_blank";
+        link.rel = "noopener noreferrer";
+        link.textContent = "Open post ↗";
+        wrapper.append(author, time, text, link);
+        return wrapper;
+      }
+    } catch { /* Invalid remote URLs are rendered as plain text. */ }
+  }
+  wrapper.append(author, time, text);
+  return wrapper;
 }
 
 function scrollTo(id) {
-  $(`.column[data-id="${id}"]`)?.scrollIntoView({ behavior: "smooth", inline: "start" });
+  const element = [...$$(".column")].find(column => column.dataset.id === id);
+  element?.scrollIntoView({ behavior: "smooth", inline: "start", block: "nearest" });
 }
 
 async function refreshAll() {
-  const n = state.columns.length;
-  $("#status").textContent = `Refreshing ${n} column${n === 1 ? "" : "s"}…`;
-  await Promise.all(state.columns.map(c => {
-    const body = $(`.column[data-id="${c.id}"] .column-body`);
-    return body ? renderColumnBody(c, body) : null;
-  }));
-  $("#status").textContent = `Refreshed ${n} column${n === 1 ? "" : "s"}`;
+  if (refreshing) return;
+  refreshing = true;
+  const button = $("#refresh-btn");
+  button.disabled = true;
+  const count = state.columns.length;
+  setStatus(`Refreshing ${count} column${count === 1 ? "" : "s"}…`);
+  try {
+    await Promise.all(state.columns.map(column => {
+      const body = [...$$(".column")].find(item => item.dataset.id === column.id)?.querySelector(".column-body");
+      return body ? renderColumnBody(column, body) : Promise.resolve();
+    }));
+    const failures = $$(".column-body .error").length;
+    setStatus(failures ? `Refresh finished: ${failures} column${failures === 1 ? "" : "s"} need attention.` : `Refreshed ${count} column${count === 1 ? "" : "s"}.`, failures > 0);
+  } finally {
+    refreshing = false;
+    button.disabled = false;
+  }
 }
-
-$("#add-column-btn").addEventListener("click", openColumnDialog);
-$("#accounts-btn").addEventListener("click", () => $("#account-dialog").showModal());
-$("#refresh-btn").addEventListener("click", refreshAll);
 
 async function openColumnDialog() {
-  const dlg = $("#column-dialog");
-  const boardSel = $("select[name=board]", dlg);
-  if (!boardSel.options.length) {
-    try { await populateBoardPicker(boardSel); }
-    catch (e) { $("#status").textContent = `Boards failed: ${e.message}`; }
-  }
-  const accSel = $("select[name=accountId]", dlg);
-  accSel.replaceChildren(...state.accounts.map(a => {
-    const o = document.createElement("option");
-    o.value = a.id;
-    o.textContent = `${a.platform}: ${a.username}`;
-    return o;
-  }));
-  updateColumnDialogFields(dlg);
-  dlg.showModal();
+  const dialog = $("#column-dialog");
+  populateAccountSelect();
+  updateColumnDialogFields(dialog);
+  dialog.showModal();
+  if ($("select[name=type]", dialog).value === "board") await ensureBoardPicker();
 }
 
-function updateColumnDialogFields(dlg) {
-  const type = $("select[name=type]", dlg).value;
+function populateAccountSelect() {
+  const select = $("select[name=accountId]", $("#column-dialog"));
+  const previous = select.value;
+  select.replaceChildren();
+  if (!state.accounts.length) {
+    const option = document.createElement("option");
+    option.value = "";
+    option.textContent = "Add a Bluesky account first";
+    select.append(option);
+    return;
+  }
+  for (const account of state.accounts) {
+    const option = document.createElement("option");
+    option.value = account.id;
+    option.textContent = `${account.platform}: ${account.username}`;
+    select.append(option);
+  }
+  if (state.accounts.some(account => account.id === previous)) select.value = previous;
+}
+
+async function ensureBoardPicker() {
+  const select = $("select[name=board]", $("#column-dialog"));
+  if (select.dataset.loaded === "true" || loadingBoards) return;
+  loadingBoards = true;
+  select.replaceChildren();
+  select.disabled = true;
+  try {
+    await populateBoardPicker(select);
+    if (!select.options.length) throw new Error("The board list was empty.");
+    select.dataset.loaded = "true";
+  } catch (error) {
+    setStatus(`Could not load the 4chan board list: ${error.message}`, true);
+    const option = document.createElement("option");
+    option.value = "";
+    option.textContent = "Could not load boards — retry by reopening Add Column";
+    select.replaceChildren(option);
+  } finally {
+    select.disabled = false;
+    loadingBoards = false;
+  }
+}
+
+function updateColumnDialogFields(dialog) {
+  const type = $("select[name=type]", dialog).value;
   const show = (name, visible) => {
-    const el = $(`[name=${name}]`, dlg);
-    if (el) el.closest("label").style.display = visible ? "" : "none";
+    const input = $(`[name=${name}]`, dialog);
+    if (input) input.closest("label").hidden = !visible;
   };
   show("platform", type === "home" || type === "hashtag");
   show("accountId", type === "home" || type === "hashtag");
-  show("hashtag",   type === "hashtag");
-  show("board",     type === "board");
-  show("feedUrl",   type === "rss");
+  show("hashtag", type === "hashtag");
+  show("board", type === "board");
+  show("feedUrl", type === "rss");
+  $("#column-form button[type=submit]").disabled = type === "board" && !$("select[name=board]", dialog).value;
 }
 
-$("#column-dialog select[name=type]")
-  .addEventListener("change", e => updateColumnDialogFields(e.target.closest("dialog")));
-
-$("#account-form").addEventListener("submit", async (e) => {
-  e.preventDefault();
-  const fd = new FormData(e.target);
-  $("#status").textContent = "Logging in…";
-  const resp = await browser.runtime.sendMessage({
-    type: "login",
-    platform: fd.get("platform"),
-    credentials: { handle: fd.get("handle"), appPassword: fd.get("appPassword") }
-  });
-  if (!resp.ok) { $("#status").textContent = `Login failed: ${resp.error}`; return; }
-  state.accounts.push(resp.account);
-  await saveState();
-  $("#status").textContent = `Logged in as ${resp.account.username}`;
-  $("#account-dialog").close();
-  e.target.reset();
+$("#column-dialog select[name=type]").addEventListener("change", async event => {
+  const select = event.currentTarget;
+  const dialog = select.closest("dialog");
+  const type = select.value;
+  updateColumnDialogFields(dialog);
+  if (type === "board") await ensureBoardPicker();
+  updateColumnDialogFields(dialog);
 });
+$("select[name=board]", $("#column-dialog")).addEventListener("change", () => updateColumnDialogFields($("#column-dialog")));
+$("#add-column-btn").addEventListener("click", () => void openColumnDialog());
+$("#accounts-btn").addEventListener("click", () => { renderAccounts(); $("#account-dialog").showModal(); });
+$("#refresh-btn").addEventListener("click", () => void refreshAll());
 
-$("#column-form").addEventListener("submit", async (e) => {
-  e.preventDefault();
-  const fd = new FormData(e.target);
-  const type = fd.get("type");
-  const column = { id: crypto.randomUUID(), type, title: fd.get("title") };
-  if (type === "board") {
-    column.board = fd.get("board");
-    if (!column.board) { $("#status").textContent = "Pick a board first"; return; }
-  } else if (type === "rss") {
-    column.feedUrl = fd.get("feedUrl");
-    if (!column.feedUrl) { $("#status").textContent = "Feed URL required"; return; }
-    let feed; try { feed = new URL(column.feedUrl); } catch { $("#status").textContent = "Enter a valid feed URL"; return; }
-    if (feed.protocol !== "https:") { $("#status").textContent = "Feeds must use HTTPS"; return; }
-    if (!await browser.permissions.request({ origins: [`https://${feed.host}/*`] })) { $("#status").textContent = "Feed permission was not granted"; return; }
-  } else {
-    column.platform = fd.get("platform");
-    column.accountId = fd.get("accountId") || null;
-    column.hashtag = fd.get("hashtag") || null;
-    if (!column.accountId) { $("#status").textContent = "Add an account first"; return; }
+async function handleAccountSubmit(event) {
+  event.preventDefault();
+  const form = event.currentTarget;
+  const submit = $("button[type=submit]", form);
+  const data = new FormData(form);
+  submit.disabled = true;
+  setStatus("Signing in to Bluesky…");
+  try {
+    const response = await browser.runtime.sendMessage({
+      type: "login",
+      platform: data.get("platform"),
+      credentials: { handle: data.get("handle"), appPassword: data.get("appPassword") }
+    });
+    if (!response?.ok) throw new Error(response?.error || "No response from the background script.");
+    const account = response.account;
+    const existing = state.accounts.findIndex(item => item.username.toLowerCase() === account.username.toLowerCase());
+    if (existing >= 0) account.id = state.accounts[existing].id;
+    const previous = state.accounts;
+    state.accounts = [...state.accounts.filter(item => item.id !== account.id), account];
+    try { await saveState(); }
+    catch (error) { state.accounts = previous; throw error; }
+    populateAccountSelect();
+    renderAccounts();
+    setStatus(`Logged in as ${account.username}.`);
+    form.reset();
+    $("#account-dialog").close();
+  } catch (error) {
+    setStatus(`Login failed: ${error.message}`, true);
+  } finally {
+    submit.disabled = false;
   }
-  state.columns.push(column);
-  await saveState();
-  renderSidebar();
-  renderColumns();
-  $("#column-dialog").close();
-  e.target.reset();
-});
+}
 
-$$("[data-close]").forEach(b =>
-  b.addEventListener("click", e => e.target.closest("dialog").close())
-);
+function renderAccounts() {
+  const list = $("#saved-accounts");
+  if (!list) return;
+  if (!state.accounts.length) {
+    list.replaceChildren(messageNode("No Bluesky accounts connected."));
+    return;
+  }
+  list.replaceChildren(...state.accounts.map(account => {
+    const item = document.createElement("li");
+    const name = document.createElement("span");
+    name.textContent = `${account.platform}: ${account.username}`;
+    const remove = document.createElement("button");
+    remove.type = "button";
+    remove.textContent = "Remove";
+    remove.addEventListener("click", () => void removeAccount(account.id));
+    item.append(name, remove);
+    return item;
+  }));
+}
 
-function messageNode(text, cls="muted") { const p=document.createElement("p"); p.className=cls; p.textContent=text; return p; }
-function errorNode(text) { const p=messageNode(`Could not load: ${text}`, "error"); const b=document.createElement("button"); b.textContent="Retry"; b.addEventListener("click", e => { const c=e.currentTarget.closest(".column"); const col=state.columns.find(x=>x.id===c?.dataset.id); if(col) renderColumnBody(col,$(".column-body",c)); }); p.append(" ",b); return p; }
+async function removeAccount(id) {
+  const account = state.accounts.find(item => item.id === id);
+  if (!account || !window.confirm(`Remove ${account.username} and its social columns?`)) return;
+  const oldAccounts = state.accounts;
+  const oldColumns = state.columns;
+  state.accounts = state.accounts.filter(item => item.id !== id);
+  state.columns = state.columns.filter(column => column.accountId !== id);
+  try {
+    await saveState();
+    renderAccounts(); populateAccountSelect(); renderSidebar(); renderColumns();
+    setStatus(`Removed ${account.username}.`);
+  } catch (error) {
+    state.accounts = oldAccounts; state.columns = oldColumns;
+    setStatus(`Could not remove account: ${error.message}`, true);
+  }
+}
 
-function esc(s) {
-  const d = document.createElement("div"); d.textContent = s; return d.innerHTML;
+$("#account-form").addEventListener("submit", event => void handleAccountSubmit(event));
+
+async function handleColumnSubmit(event) {
+  event.preventDefault();
+  const form = event.currentTarget;
+  const submit = $("button[type=submit]", form);
+  const data = new FormData(form);
+  const type = String(data.get("type") || "");
+  const title = String(data.get("title") || "").trim();
+  if (!title) { setStatus("Enter a title for this column.", true); return; }
+  submit.disabled = true;
+  try {
+    const column = { id: crypto.randomUUID(), type, title };
+    if (type === "board") {
+      column.board = String(data.get("board") || "");
+      if (!/^[a-z0-9]+$/i.test(column.board)) throw new Error("Choose a valid board.");
+    } else if (type === "rss") {
+      let feed;
+      try { feed = new URL(String(data.get("feedUrl") || "")); }
+      catch { throw new Error("Enter a valid HTTPS feed URL."); }
+      if (feed.protocol !== "https:" || feed.username || feed.password) throw new Error("Feeds must use a valid HTTPS URL without embedded credentials.");
+      const originPattern = `${feed.origin}/*`;
+      // Request immediately during the submit gesture; awaiting `contains()` first can lose activation in Firefox.
+      const granted = await browser.permissions.request({ origins: [originPattern] });
+      if (!granted) throw new Error("Feed host permission was not granted.");
+      column.feedUrl = feed.href;
+    } else if (type === "home" || type === "hashtag") {
+      column.platform = String(data.get("platform") || "bluesky");
+      column.accountId = String(data.get("accountId") || "");
+      const account = state.accounts.find(item => item.id === column.accountId);
+      if (!account) throw new Error("Connect a Bluesky account before adding a social column.");
+      if (type === "hashtag") {
+        column.hashtag = String(data.get("hashtag") || "").trim().replace(/^#+/, "");
+        if (!column.hashtag) throw new Error("Enter a hashtag to search.");
+      }
+    } else {
+      throw new Error(`Unsupported column type: ${type}`);
+    }
+
+    const previous = state.columns;
+    state.columns = [...state.columns, column];
+    try { await saveState(); }
+    catch (error) { state.columns = previous; throw error; }
+    renderSidebar(); renderColumns();
+    setStatus(`Added ${title}.`);
+    form.reset();
+    updateColumnDialogFields($("#column-dialog"));
+    $("#column-dialog").close();
+  } catch (error) {
+    setStatus(`Could not add column: ${error.message}`, true);
+  } finally {
+    submit.disabled = false;
+  }
+}
+
+$("#column-form").addEventListener("submit", event => void handleColumnSubmit(event));
+$$("[data-close]").forEach(button => button.addEventListener("click", event => event.currentTarget.closest("dialog").close()));
+
+function messageNode(text, className = "muted") {
+  const paragraph = document.createElement("p");
+  paragraph.className = className;
+  paragraph.textContent = text;
+  return paragraph;
+}
+
+function errorNode(text, retry) {
+  const paragraph = messageNode(`Could not load: ${text}`, "error");
+  const button = document.createElement("button");
+  button.type = "button";
+  button.textContent = "Retry";
+  button.addEventListener("click", retry, { once: true });
+  paragraph.append(" ", button);
+  return paragraph;
 }
 
 (async () => {
-  await loadState();
-  renderSidebar();
-  renderColumns();
+  try {
+    await loadState();
+    renderSidebar();
+    renderAccounts();
+    renderColumns();
+    setStatus(state.columns.length ? `${state.columns.length} column${state.columns.length === 1 ? "" : "s"} ready.` : "Ready. Add your first column.");
+  } catch (error) {
+    setStatus(`Argus could not load saved data: ${error.message}. Check Firefox extension storage permissions, then reload this tab.`, true);
+  }
 })();

@@ -6,11 +6,14 @@
   "browser_specific_settings": {
     "gecko": {
       "id": "argus@jdoe.dev",
-      "strict_min_version": "115.0"
+      "strict_min_version": "128.0",
+      "data_collection_permissions": {
+        "required": ["authenticationInfo", "websiteContent"]
+      }
     }
   },
   "permissions": ["storage", "tabs"],
-  "host_permissions": ["https://bsky.social/*", "https://a.4cdn.org/*", "https://i.4cdn.org/*", "https://boards.4chan.org/*"],
+  "host_permissions": ["https://bsky.social/*", "https://a.4cdn.org/*", "https://i.4cdn.org/*"],
   "optional_host_permissions": ["https://*/*"],
   "background": { "scripts": ["background.js"], "type": "module" },
   "action": { "default_title": "Open Argus", "default_icon": { "48": "icons/icon-48.png" } },

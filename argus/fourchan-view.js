@@ -19,12 +19,19 @@ export async function populateBoardPicker(selectEl) {
   }
 }
 
+const catalogRequest = new WeakMap();
 export async function renderCatalog(container, board, onOpenThread) {
-  container.innerHTML = `<p class="muted">Loading /${board}/…</p>`;
+  const requestId = (catalogRequest.get(container) || 0) + 1;
+  catalogRequest.set(container, requestId);
+  container.replaceChildren(message(`Loading /${board}/ catalog…`));
   let items;
-  try { items = await fourChanAdapter.getCatalog(board, true); }
-  catch (e) { container.innerHTML = `<p class="error">${esc(e.message)}</p>`; return; }
-  if (!items.length) { container.innerHTML = `<p class="muted">Empty board.</p>`; return; }
+  try { items = await fourChanAdapter.getCatalog(board); }
+  catch (e) {
+    if (catalogRequest.get(container) === requestId) container.replaceChildren(retryMessage(`Could not load /${board}/: ${e.message}`, () => renderCatalog(container, board, onOpenThread)));
+    return;
+  }
+  if (catalogRequest.get(container) !== requestId) return;
+  if (!items.length) { container.replaceChildren(message("No threads on this board.")); return; }
 
   const grid = document.createElement("div");
   grid.className = "catalog-grid";
@@ -79,6 +86,7 @@ function catalogCard(t, onOpenThread) {
 }
 
 let threadModal = null;
+let threadRequest = 0;
 function ensureThreadModal() {
   if (threadModal) return threadModal;
   threadModal = document.createElement("dialog");
@@ -105,13 +113,18 @@ export async function openThread(board, threadNo) {
 
   title.textContent = `/${board}/ — thread #${threadNo}`;
   ext.href = `https://boards.4chan.org/${board}/thread/${threadNo}`;
-  body.innerHTML = `<p class="muted">Loading thread…</p>`;
+  const requestId = ++threadRequest;
+  body.replaceChildren(message(`Loading /${board}/ thread #${threadNo}…`));
   modal.showModal();
 
   let data;
-  try { data = await fourChanAdapter.getThread(board, threadNo, true); }
-  catch (e) { body.innerHTML = `<p class="error">${esc(e.message)}</p>`; return; }
-
+  try { data = await fourChanAdapter.getThread(board, threadNo); }
+  catch (e) {
+    if (requestId === threadRequest) body.replaceChildren(retryMessage(`Could not load thread: ${e.message}`, () => openThread(board, threadNo)));
+    return;
+  }
+  if (requestId !== threadRequest) return;
+  if (!data.posts.length) { body.replaceChildren(message("This thread has no posts.")); return; }
   body.replaceChildren(...data.posts.map(p => postElement(p)));
   body.scrollTop = 0;
 }
@@ -323,9 +336,23 @@ function walk(node, out) {
   }
 }
 
-function esc(s) {
-  const d = document.createElement("div"); d.textContent = s; return d.innerHTML;
+function message(text, className = "muted") {
+  const node = document.createElement("p");
+  node.className = className;
+  node.textContent = text;
+  return node;
 }
+
+function retryMessage(text, retry) {
+  const node = message(text, "error");
+  const button = document.createElement("button");
+  button.type = "button";
+  button.textContent = "Retry";
+  button.addEventListener("click", retry, { once: true });
+  node.append(" ", button);
+  return node;
+}
+
 function fmtSize(bytes) {
   if (!bytes) return "?";
   const u = ["B","KB","MB","GB"]; let n = bytes, i = 0;
