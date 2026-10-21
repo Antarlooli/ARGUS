@@ -1,0 +1,116 @@
+* { box-sizing: border-box; }
+body { margin: 0; font-family: system-ui, sans-serif; height: 100vh;
+       display: flex; flex-direction: column; background: #f6f6f6; }
+
+#toolbar { display: flex; align-items: center; gap: 8px;
+           padding: 8px 12px; background: #0b1220; color: #e8eef7; }
+#toolbar strong { font-family: "Iowan Old Style", Georgia, serif;
+                  letter-spacing: .04em; color: #a7c3e2; }
+#toolbar button { background: #1c2740; color: #e8eef7;
+                  border: 1px solid #2a3a5c;
+                  padding: 4px 10px; border-radius: 4px; cursor: pointer; }
+#toolbar button:hover { background: #26344f; }
+#status { margin-left: auto; font-size: 12px; color: #8ea3c0; }
+
+#layout { display: flex; flex: 1; min-height: 0; }
+
+#sidebar { width: 220px; background: #f4f6fa; border-right: 1px solid #dfe3ea;
+           padding: 12px; overflow-y: auto; }
+#sidebar h3 { margin: 0 0 8px; font-size: 11px; color: #667;
+              text-transform: uppercase; letter-spacing: .08em; }
+#column-list { list-style: none; padding: 0; margin: 0; }
+#column-list li { padding: 6px 8px; cursor: pointer; border-radius: 4px;
+                  font-size: 13px; color: #334; }
+#column-list li:hover { background: #e5eaf2; }
+
+#columns { flex: 1; display: flex; gap: 12px; padding: 12px;
+           overflow-x: auto; overflow-y: hidden; }
+.column { min-width: 320px; max-width: 320px; background: #fff;
+          border-radius: 8px; box-shadow: 0 1px 3px rgba(0,0,0,.08);
+          display: flex; flex-direction: column; max-height: 100%; }
+.column-header { padding: 8px 12px; border-bottom: 1px solid #eee;
+                 display: flex; justify-content: space-between;
+                 align-items: center; font-weight: 600; font-size: 13px; }
+.column-header .refresh { background: none; border: none; cursor: pointer;
+                          font-size: 14px; color: #557; }
+.column-body { flex: 1; overflow-y: auto; padding: 8px; }
+.item { padding: 8px; border-bottom: 1px solid #f0f0f0; font-size: 13px;
+        line-height: 1.4; }
+.item .author { font-weight: 600; }
+.item .time { color: #888; font-size: 11px; margin: 2px 0 4px; }
+.muted { color: #889; font-size: 12px; padding: 8px; }
+.error { color: #b02020; font-size: 12px; padding: 8px; }
+
+.catalog-grid { display: grid;
+                grid-template-columns: repeat(auto-fill, minmax(180px, 1fr));
+                gap: 10px; padding: 8px; }
+.thread-card { background: #fff; border: 1px solid #e5e5e5; border-radius: 6px;
+               overflow: hidden; cursor: pointer; display: flex;
+               flex-direction: column; font-size: 12px;
+               transition: transform .1s, box-shadow .1s; }
+.thread-card:hover { transform: translateY(-1px); box-shadow: 0 2px 8px rgba(0,0,0,.12); }
+.thread-card.sticky { border-color: #f6c200; background: #fffbe6; }
+.thread-card img { width: 100%; height: 140px; object-fit: cover;
+                   display: block; background: #eee; cursor: zoom-in; }
+.thread-card .no-image { height: 60px; background: #f0f0f0; }
+.thread-meta { font-size: 10px; color: #777; padding: 4px 8px 0; }
+.thread-subject { font-weight: 700; padding: 0 8px; white-space: nowrap;
+                  overflow: hidden; text-overflow: ellipsis; }
+.thread-body { padding: 4px 8px 8px; color: #333; max-height: 5.2em;
+               overflow: hidden; position: relative; }
+.thread-body::after { content: ""; position: absolute; left: 0; right: 0;
+                      bottom: 0; height: 1.6em;
+                      background: linear-gradient(transparent, #fff); }
+
+.thread-modal { width: min(920px, 94vw); max-height: 88vh; padding: 0;
+                border: none; border-radius: 10px; overflow: hidden;
+                display: flex; flex-direction: column; }
+.thread-modal::backdrop { background: rgba(0,0,0,.55); backdrop-filter: blur(4px); }
+.thread-header { display: flex; align-items: center; gap: 12px;
+                 padding: 10px 14px; background: #f1e6c9;
+                 border-bottom: 1px solid #d8c79c; font-size: 13px; }
+.thread-title { flex: 1; font-weight: 600; }
+.thread-external { color: #6d4a00; text-decoration: none; font-size: 12px; }
+.thread-external:hover { text-decoration: underline; }
+.thread-close { border: none; background: transparent; font-size: 16px; cursor: pointer; }
+.thread-body-scroll { overflow-y: auto; padding: 12px; background: #faf6e8; }
+.post { background: #fff; border: 1px solid #e0d9c4; border-radius: 6px;
+        padding: 10px 12px; margin-bottom: 10px; font-size: 13px; line-height: 1.45; }
+.post.op { border-left: 4px solid #b38700; }
+.post.flash { animation: flash 1.2s ease; }
+@keyframes flash { from { background: #fff3b0; } to { background: #fff; } }
+.post-head { color: #666; font-size: 12px; margin-bottom: 6px; }
+.post-head .trip { color: #117743; font-weight: 700; }
+.post-head .capcode { color: #d00; font-weight: 700; }
+.post-head .post-no { color: #999; }
+.post-image { margin: 6px 0; }
+.post-image img { max-width: 160px; max-height: 160px; cursor: zoom-in;
+                  border: 1px solid #ddd; background: #eee; display: block; }
+.post-image figcaption { font-size: 10px; color: #777; margin-top: 2px; }
+.post-subject { font-weight: 700; margin: 4px 0; color: #b38700; }
+.post-comment { margin-top: 4px; }
+.post-comment a { color: #3a6d99; text-decoration: none; }
+.post-comment a:hover { text-decoration: underline; }
+.post-comment .quotelink { color: #d07; }
+.post-comment .quote { color: #789922; }
+.post-comment .deadlink { color: #999; }
+.post-comment .spoiler { background: #000; color: #000; }
+.post-comment .spoiler:hover { color: #fff; }
+
+.hover-zoom { position: fixed; z-index: 15000; pointer-events: none;
+              background: #000; border-radius: 4px; overflow: hidden;
+              box-shadow: 0 8px 24px rgba(0,0,0,.45); }
+.hover-zoom img, .hover-zoom video { display: block; max-width: 50vw; max-height: 60vh; }
+
+.lightbox { padding: 0; border: none; background: transparent;
+            width: 100vw; max-width: 100vw; height: 100vh; max-height: 100vh;
+            cursor: zoom-out; }
+.lightbox[open] { display: flex; align-items: center; justify-content: center; }
+.lightbox::backdrop { background: rgba(0,0,0,.6);
+                      backdrop-filter: blur(8px);
+                      -webkit-backdrop-filter: blur(8px); }
+.lightbox-inner { display: flex; flex-direction: column; gap: 8px; cursor: default; }
+.lightbox-media img, .lightbox-media video { max-width: 92vw; max-height: 82vh;
+                                             display: block; border-radius: 6px;
+                                             box-shadow: 0 12px 40px rgba(0,0,0,.6); }
+.lightbox-caption { color: #eee; font-size: 12px; text-align: center; }
