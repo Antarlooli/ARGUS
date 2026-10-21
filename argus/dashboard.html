@@ -1,0 +1,72 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <title>Argus</title>
+  <link rel="stylesheet" href="dashboard.css">
+</head>
+<body>
+  <header id="toolbar">
+    <strong>Argus</strong>
+    <button id="add-column-btn">+ Column</button>
+    <button id="accounts-btn">Accounts</button>
+    <button id="refresh-btn">Refresh All</button>
+    <span id="status"></span>
+  </header>
+
+  <div id="layout">
+    <aside id="sidebar">
+      <h3>Columns</h3>
+      <ul id="column-list"></ul>
+    </aside>
+    <main id="columns"></main>
+  </div>
+
+  <dialog id="account-dialog">
+    <form id="account-form">
+      <h2>Add Account</h2>
+      <label>Platform
+        <select name="platform">
+          <option value="bluesky">Bluesky</option>
+        </select>
+      </label>
+      <label>Handle <input name="handle" placeholder="you.bsky.social" required></label>
+      <label>App Password <input name="appPassword" type="password" required></label>
+      <menu>
+        <button type="button" data-close>Cancel</button>
+        <button type="submit">Save</button>
+      </menu>
+    </form>
+  </dialog>
+
+  <dialog id="column-dialog">
+    <form id="column-form">
+      <h2>Add Column</h2>
+      <label>Title <input name="title" required></label>
+      <label>Type
+        <select name="type">
+          <option value="home">Home Feed</option>
+          <option value="hashtag">Hashtag</option>
+          <option value="board">4chan Board</option>
+          <option value="rss">News (RSS)</option>
+        </select>
+      </label>
+      <label>Platform
+        <select name="platform">
+          <option value="bluesky">Bluesky</option>
+        </select>
+      </label>
+      <label>Account <select name="accountId"></select></label>
+      <label>Hashtag <input name="hashtag" placeholder="without #"></label>
+      <label>Board <select name="board"></select></label>
+      <label>Feed URL <input name="feedUrl" placeholder="https://feeds.bbci.co.uk/news/world/rss.xml"></label>
+      <menu>
+        <button type="button" data-close>Cancel</button>
+        <button type="submit">Add</button>
+      </menu>
+    </form>
+  </dialog>
+
+  <script type="module" src="dashboard.js"></script>
+</body>
+</html>
