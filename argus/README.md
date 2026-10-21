@@ -2,10 +2,10 @@
 
 A calm, watchful console for every feed you follow.
 
-Firefox extension dashboard with Bluesky timelines and hashtag search, RSS/Atom/JSON Feed news, and 4chan board catalogs with inline threads.
+Firefox 128+ desktop extension dashboard with Bluesky timelines and hashtag search, RSS/Atom/JSON Feed news, and 4chan board catalogs with inline threads.
 
 ## Install
-1. Open `about:debugging#/runtime/this-firefox` in Firefox 115+.
+1. Open `about:debugging#/runtime/this-firefox` in Firefox 128+ for desktop.
 2. Choose **Load Temporary Add-on…** and select `argus/manifest.json`.
 3. Click the Argus toolbar icon to open the dashboard.
 

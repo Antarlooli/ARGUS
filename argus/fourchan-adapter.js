@@ -24,6 +24,14 @@ const cache = {
 const BOARDS_TTL  = 24 * 60 * 60 * 1000;
 const CATALOG_TTL = 60 * 1000;
 const THREAD_TTL  = 30 * 1000;
+const pending = new Map();
+
+function coalesce(key, task) {
+  if (pending.has(key)) return pending.get(key);
+  const promise = task().finally(() => pending.delete(key));
+  pending.set(key, promise);
+  return promise;
+}
 
 export const fourChanAdapter = {
   async getBoards(force = false) {
@@ -39,44 +47,36 @@ export const fourChanAdapter = {
   async getCatalog(board, force = false) {
     const c = cache.catalog.get(board);
     if (!force && c && Date.now() - c.at < CATALOG_TTL) return c.items;
-
-    const headers = {};
-    if (c?.lastModified) headers["If-Modified-Since"] = c.lastModified;
-
-    const res = await rateLimited(() =>
-      fetch(`${API}/${board}/catalog.json`, { headers })
-    );
-    if (res.status === 304 && c) { c.at = Date.now(); return c.items; }
-    if (!res.ok) throw new Error(`Catalog ${board} failed (${res.status})`);
-
-    const pages = await res.json();
-    const items = pages
-      .flatMap(p => p.threads || [])
-      .map(t => normalizeThread(board, t));
-
-    cache.catalog.set(board, {
-      items,
-      at: Date.now(),
-      lastModified: res.headers.get("Last-Modified")
+    return coalesce(`catalog:${board}`, async () => {
+      const headers = {};
+      if (c?.lastModified) headers["If-Modified-Since"] = c.lastModified;
+      const res = await rateLimited(() => fetch(`${API}/${board}/catalog.json`, { headers }));
+      if (res.status === 304 && c) { c.at = Date.now(); return c.items; }
+      if (!res.ok) throw new Error(`Catalog /${board}/ failed (${res.status}${res.statusText ? ` ${res.statusText}` : ""}).`);
+      const pages = await res.json();
+      if (!Array.isArray(pages)) throw new Error(`Catalog /${board}/ returned an invalid response.`);
+      const items = pages.flatMap(page => Array.isArray(page.threads) ? page.threads : [])
+        .map(thread => normalizeThread(board, thread));
+      cache.catalog.set(board, { items, at: Date.now(), lastModified: res.headers.get("Last-Modified") });
+      return items;
     });
-    return items;
   },
 
   async getThread(board, no, force = false) {
+    if (!/^[a-z0-9]+$/i.test(board) || !/^\d+$/.test(String(no))) throw new Error("Invalid board or thread number.");
     const key = `${board}:${no}`;
     const c = cache.thread.get(key);
     if (!force && c && Date.now() - c.at < THREAD_TTL) return c.data;
-
-    const res = await rateLimited(() =>
-      fetch(`${API}/${board}/thread/${no}.json`)
-    );
-    if (!res.ok) throw new Error(`Thread #${no} failed (${res.status})`);
-
-    const json = await res.json();
-    const posts = (json.posts || []).map(p => normalizePost(board, p));
-    const data = { board, threadNo: no, posts };
-    cache.thread.set(key, { data, at: Date.now() });
-    return data;
+    return coalesce(`thread:${key}`, async () => {
+      const res = await rateLimited(() => fetch(`${API}/${board}/thread/${no}.json`));
+      if (!res.ok) throw new Error(`Thread #${no} on /${board}/ failed (${res.status}).`);
+      const json = await res.json();
+      if (!Array.isArray(json.posts)) throw new Error(`Thread #${no} returned an invalid response.`);
+      const posts = json.posts.map(post => normalizePost(board, post));
+      const data = { board, threadNo: no, posts };
+      cache.thread.set(key, { data, at: Date.now() });
+      return data;
+    });
   }
 };
 
